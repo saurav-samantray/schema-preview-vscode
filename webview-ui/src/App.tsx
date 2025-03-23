@@ -1,11 +1,18 @@
 import React, { useEffect, useState } from "react";
 import { JsonSchemaViewer } from '@stoplight/json-schema-viewer';
+import './light.css';
+import './main.css';
+import './dark.css';
 
-declare function acquireVsCodeApi(): {
+// Define a type for the VS Code API (optional, but good practice)
+interface VsCodeApi {
   postMessage: (message: any) => void;
   getState: () => any;
   setState: (state: any) => void;
-};
+}
+
+// Declare the acquireVsCodeApi function as a global variable
+declare function acquireVsCodeApi(): VsCodeApi;
 
 const App: React.FC = () => {
   const dummySchema: any = {
@@ -137,55 +144,80 @@ const App: React.FC = () => {
     }
   };
   const [jsonSchema, setJsonSchema] = useState<any>(null);
-  const [filePath, setFilePath] = useState<string | null>(null);
+  const [standalone, setStandalone] = useState<boolean>(false);
+  const [theme, setTheme] = useState<string>('light');
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
+  // useEffect(() => {
+  //   // Apply theme by adding/removing classes to the root element
+  //   const root = document.getElementById('root');
+  //   if (root) {
+  //     if (theme === 'dark') {
+  //       root.classList.add('dark');
+  //       root.classList.remove('light');
+  //       document.body.classList.add('dark');
+  //       document.body.classList.remove('light');
+  //     } else {
+  //       root.classList.add('light');
+  //       root.classList.remove('dark');
+  //       document.body.classList.add('light');
+  //       document.body.classList.remove('dark');
+  //     }
+  //   }
+  // }, [theme]);
+
   useEffect(() => {
-    console.log("Default effect. Adding windows listener");
-    const vscode = acquireVsCodeApi();
-    console.log(`vscode: ${JSON.stringify(vscode)}`);
+    if (typeof acquireVsCodeApi === 'function') {
+      console.log("Default effect. Adding windows listener");
+      const vscode = acquireVsCodeApi();
+      console.log(`vscode: ${JSON.stringify(vscode)}`);
 
-    window.addEventListener('message', event => {
-      const message = event.data;
-      console.log(`New message in webview: ${JSON.stringify(message)}`);
-      switch (message.type) {
-        case 'fileContent':
-          setJsonSchema(JSON.parse(message.data));
-          setIsLoading(false);
-          break;
-      }
-    });
+      window.addEventListener('message', event => {
+        const message = event.data;
+        console.log(`New message in webview: ${JSON.stringify(message)}`);
+        switch (message.type) {
+          case 'fileContent':
+            setJsonSchema(JSON.parse(message.data));
+            setTheme(message.theme);
+            setIsLoading(false);
+            break;
+          case 'theme':
+            setTheme(message.data);
+            break;
+        }
+      });
 
-    vscode.postMessage({ type: 'ready' });
+      vscode.postMessage({ type: 'ready' });
+    } else {
+      console.log("acquireVsCodeApi is undefined. Potentially webview is being run as standalone app.")
+      setStandalone(true);
+      setIsLoading(false);
+    }
   }, []);
 
-  // useEffect(() => {
-  //   if (filePath) {
-  //     setIsLoading(true);
-  //     fetch(`vscode-resource://${filePath}`)
-  //       .then(response => response.json())
-  //       .then(data => {
-  //         console.log(`Json schema data : ${JSON.stringify(data)}`);
-  //         setJsonSchema(data);
-  //         setIsLoading(false);
-  //       })
-  //       .catch(error => {
-  //         console.error('Error fetching JSON schema:', error);
-  //         setIsLoading(false);
-  //       });
-  //   }
-  // }, [filePath]);
+  const toggleTheme = () => {
+    setTheme(prevTheme => prevTheme === 'light' ? 'dark' : 'light');
+  };
 
   return (
-    <div className="sl-p-2">
-        {isLoading ? (
-          <div className="sl-text-base">
-            Loading content
-          </div>
-        ) : jsonSchema ? (
-          <JsonSchemaViewer schema={jsonSchema} />
-        ) : (
+    <div className="sl-p-2" data-theme={theme}>
+      {standalone && (
+        <div className="theme-toggle">
+          <button onClick={toggleTheme}>
+            Toggle Theme
+          </button>
+        </div>
+      )}
+      {isLoading ? (
+        <div className="sl-flex sl-items-center sl-justify-center sl-h-screen">
+        <div className="loader" />
+      </div>
+      ) : jsonSchema ? (
+        <JsonSchemaViewer schema={jsonSchema} />
+      ) : standalone ?
+        <JsonSchemaViewer schema={dummySchema} />
+        : (
           <p>No schema loaded.</p>
         )}
     </div>

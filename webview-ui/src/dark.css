@@ -164,3 +164,13 @@
   --color-on-danger: hsla(0, 84%, 100%, 1);
 
 }
+
+.dark .theme-toggle button {
+  background-color: #555;
+  color: #fff;
+  border: 1px solid #777;
+}
+
+.dark .theme-toggle button:hover {
+  background-color: #666;
+}

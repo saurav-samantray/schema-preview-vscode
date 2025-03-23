@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getUri } from './utils';
+import * as yaml from 'js-yaml';
 import $RefParser from '@stoplight/json-schema-ref-parser';
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined;
@@ -20,11 +21,24 @@ export function activate(context: vscode.ExtensionContext) {
       }
     })
   );
+
+  // to manage the change in theme and update the custom preview's theme dynamically
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveColorTheme(colorTheme => {
+      console.log(`Theme changed: ${JSON.stringify(colorTheme)}`);
+      let theme = 'light';
+      if([2,3].includes(colorTheme.kind)) {
+        theme = 'dark';
+      }
+      if (currentPanel) {
+        currentPanel?.webview.postMessage({ type: 'theme', data: theme });
+      }
+    })
+  );
 }
 
 async function createOrShow(extensionUri: vscode.Uri, filePath: string) {
   console.log(`createOrShow() called with filePath: ${filePath} and extensionUri: ${extensionUri}`);
-  console.log(`current color theme: ${JSON.stringify(vscode.window.activeColorTheme)}`);
   console.log(`current color theme: ${vscode.workspace.getConfiguration().get("workbench.colorTheme")}`);
 
   const column = vscode.window.activeTextEditor
@@ -56,20 +70,25 @@ async function createOrShow(extensionUri: vscode.Uri, filePath: string) {
     );
   }
   console.log(`Setting html for webview. extensionUri: ${extensionUri}`);
-  const theme = vscode.workspace.getConfiguration().get("workbench.colorTheme") as string ?? 'light';
+  let theme = 'light';
+  if ((vscode.workspace.getConfiguration().get("workbench.colorTheme") as string)?.toLowerCase().includes('dark')) {
+    theme = 'dark';
+  }
   currentPanel.webview.html = getHtmlForWebview(currentPanel.webview, extensionUri, filePath, theme);
-  console.log(`Response from getHtmlForWebview() method: ${currentPanel.webview.html}`);
+  //console.log(`Response from getHtmlForWebview() method: ${currentPanel.webview.html}`);
 
-  currentPanel.webview.postMessage({ type: 'openFile', data: filePath });
+  //Don't need the below message as WebView cannot access file with the filePath. Have to send the complete content
+  //currentPanel.webview.postMessage({ type: 'openFile', data: filePath });
 
   currentPanel.webview.onDidReceiveMessage(async (data) => {
-    console.log(`Recieved message: ${JSON.stringify(data)}`);
+    console.log(`Recieved message in extension host: ${JSON.stringify(data)}`);
     switch (data.type) {
       case 'ready': {
-        console.log(`Webview is ready! : ${currentPanel}`);
+        console.log(`Webview is ready! : currentPanel : ${JSON.stringify(currentPanel)}`);
         try {
+          //parse the content to dereference
           const parsedSchema = await parseSchemaFile(filePath);
-          currentPanel?.webview.postMessage({ type: 'fileContent', data: JSON.stringify(parsedSchema) });
+          currentPanel?.webview.postMessage({ type: 'fileContent', data: JSON.stringify(parsedSchema), theme: theme });
         } catch (error) {
           console.error('Error parsing schema:', error);
           currentPanel?.webview.postMessage({ type: 'fileContent', data: null });
@@ -77,24 +96,57 @@ async function createOrShow(extensionUri: vscode.Uri, filePath: string) {
         break;
       }
       default:
-        console.log(`Recieved message: ${JSON.stringify(data)}`);
+        console.log(`Recieved message in extension host: ${JSON.stringify(data)}`);
         break;
     }
   });
 }
 
+/**
+ * Accepts the file path(ideally JSON schem in json or yaml format).
+ * Dereferences external refs and return a single JSON schema
+ * 
+ * @param filePath 
+ * @returns Promise<string>
+ */
 async function parseSchemaFile(filePath: string): Promise<any> {
   try {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
-    const parsedSchema = await $RefParser.dereference(filePath, JSON.parse(fileContent), {});
-    console.log(`Parsed schema: ${JSON.stringify(parsedSchema)}`)
-    return parsedSchema;
+    let parsedContent;
+    if (filePath.endsWith('.yaml') || filePath.endsWith('.yml')) {
+      parsedContent = yaml.load(fileContent);
+    } else {
+      parsedContent = JSON.parse(fileContent);
+    }
+    // Use the `resolve` method instead of `dereference` to handle errors gracefully
+    const parser = new $RefParser();
+    const parsedSchema = await parser.resolve(filePath, parsedContent);
+    console.log(`Parsed schema: ${JSON.stringify(parsedSchema)}`);
+
+    // Now that we have resolved the references, we can dereference them
+    const dereferencedSchema = await parser.dereference(filePath, parsedContent, {
+        continueOnError: true,
+        resolve: {
+            file: { canRead: true },
+            http: { canRead: true },
+        },
+    });
+    console.log(`Dereferenced schema : ${JSON.stringify(dereferencedSchema)}`);
+    return parsedContent;
   } catch (error) {
     console.error('Error parsing schema:', error);
     throw error;
   }
 }
 
+/**
+ * 
+ * @param webview 
+ * @param extensionUri 
+ * @param filePath 
+ * @param theme 
+ * @returns 
+ */
 function getHtmlForWebview(webview: vscode.Webview, extensionUri: vscode.Uri, filePath: string, theme: string) {
   console.log(`getHtmlForWebview() method`);
   const { scriptUri, styleUri, styleThemeUri } = getDistFileUris(webview, extensionUri, theme);
@@ -102,12 +154,12 @@ function getHtmlForWebview(webview: vscode.Webview, extensionUri: vscode.Uri, fi
   console.log(`styleUri: ${styleUri}`);
   console.log(`styleThemeUri: ${styleThemeUri}`);
   const nonce = getNonce();
-  const toolkitUri = getUri(webview, extensionUri, [
-    'node_modules',
-    'vscode-webview-ui-toolkit',
-    'dist',
-    'toolkit.js',
-  ]);
+  // const toolkitUri = getUri(webview, extensionUri, [
+  //   'node_modules',
+  //   'vscode-webview-ui-toolkit',
+  //   'dist',
+  //   'toolkit.js',
+  // ]);
 
   return `
     <!DOCTYPE html>
@@ -116,8 +168,6 @@ function getHtmlForWebview(webview: vscode.Webview, extensionUri: vscode.Uri, fi
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>JSON Schema Viewer</title>
-        <link rel="stylesheet" href="${styleUri}">
-        <link rel="stylesheet" href="${styleThemeUri}">
       </head>
       <body>
         <div id="root"></div>
@@ -129,7 +179,6 @@ function getHtmlForWebview(webview: vscode.Webview, extensionUri: vscode.Uri, fi
 
 function getDistFileUris(webview: vscode.Webview, extensionUri: vscode.Uri, theme: string = 'light') {
   const distPath = path.join(extensionUri.fsPath, 'webview-ui', 'dist', 'assets');
-  const wvSrcPath = path.join(extensionUri.fsPath, 'webview-ui', 'src');
   const files = fs.readdirSync(distPath);
 
   const scriptFile = files.find(file => file.startsWith('main') && file.endsWith('.js'));
@@ -140,12 +189,15 @@ function getDistFileUris(webview: vscode.Webview, extensionUri: vscode.Uri, them
   }
 
   const scriptUri = getUri(webview, extensionUri, ['webview-ui', 'dist', 'assets', scriptFile]);
+  // Direct access to styling from the src folder has to be removed. Currently used as a work around till webpack is fixed 
+  // to properly bundle css files into dist output
   const styleUri = getUri(webview, extensionUri, ['webview-ui', 'src', 'main.css']);
   let styleThemeUri = getUri(webview, extensionUri, ['webview-ui', 'src', 'light.css']);
+  
+  //Theme selection should happen at webview reactjs app level. Currently below code is a work around
   if (theme.toLowerCase().includes('dark')) {
     styleThemeUri = getUri(webview, extensionUri, ['webview-ui', 'src', 'dark.css']);
   }
-
 
   return { scriptUri, styleUri, styleThemeUri };
 }

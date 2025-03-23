@@ -164,3 +164,13 @@
     --color-on-danger: hsla(0, 84%, 100%, 1);
 
 }
+
+.light .theme-toggle button {
+  background-color: #eee;
+  color: #000;
+  border: 1px solid #ccc;
+}
+
+.light .theme-toggle button:hover {
+  background-color: #ddd;
+}
