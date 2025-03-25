@@ -22,12 +22,28 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // to detect changes in schema and push the new content webview
+  vscode.workspace.onDidSaveTextDocument(async (e: vscode.TextDocument) => {
+    console.log('Document changed.');
+    console.log(e.getText());
+    console.log('Document changed Parsed schema');
+
+    const theme = await getCurrentTheme();
+
+    const parsedSchema = await parseSchemaFile(e.uri.fsPath);
+    console.log(parsedSchema);
+
+    if (currentPanel) {
+      currentPanel?.webview.postMessage({ type: 'fileContent', data: JSON.stringify(parsedSchema), theme: theme });
+    }
+  });
+
   // to manage the change in theme and update the custom preview's theme dynamically
   context.subscriptions.push(
     vscode.window.onDidChangeActiveColorTheme(colorTheme => {
       console.log(`Theme changed: ${JSON.stringify(colorTheme)}`);
       let theme = 'light';
-      if([2,3].includes(colorTheme.kind)) {
+      if ([2, 3].includes(colorTheme.kind)) {
         theme = 'dark';
       }
       if (currentPanel) {
@@ -48,13 +64,13 @@ async function createOrShow(extensionUri: vscode.Uri, filePath: string) {
   if (currentPanel) {
     console.log(`currentPanel present: ${currentPanel}`);
     currentPanel.title = path.basename(filePath);
-    currentPanel.reveal(column);
+    //currentPanel.reveal(column);
   } else {
     console.log(`Creating new currentPanel`);
     currentPanel = vscode.window.createWebviewPanel(
       'json-schema-viewer',
       path.basename(filePath),
-      vscode.ViewColumn.Active,
+      vscode.ViewColumn.Beside,
       {
         enableScripts: true,
         localResourceRoots: [extensionUri],
@@ -70,10 +86,7 @@ async function createOrShow(extensionUri: vscode.Uri, filePath: string) {
     );
   }
   console.log(`Setting html for webview. extensionUri: ${extensionUri}`);
-  let theme = 'light';
-  if ((vscode.workspace.getConfiguration().get("workbench.colorTheme") as string)?.toLowerCase().includes('dark')) {
-    theme = 'dark';
-  }
+  const theme = await getCurrentTheme();
   currentPanel.webview.html = getHtmlForWebview(currentPanel.webview, extensionUri, filePath, theme);
   //console.log(`Response from getHtmlForWebview() method: ${currentPanel.webview.html}`);
 
@@ -103,6 +116,23 @@ async function createOrShow(extensionUri: vscode.Uri, filePath: string) {
 }
 
 /**
+ * 
+ * Fetch current theme of VS code
+ * @returns 
+ * 
+ */
+async function getCurrentTheme(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let theme = 'light';
+    if ((vscode.workspace.getConfiguration().get("workbench.colorTheme") as string)?.toLowerCase().includes('dark')) {
+      theme = 'dark';
+    }
+    resolve(theme);
+  });
+}
+
+
+/**
  * Accepts the file path(ideally JSON schem in json or yaml format).
  * Dereferences external refs and return a single JSON schema
  * 
@@ -125,11 +155,11 @@ async function parseSchemaFile(filePath: string): Promise<any> {
 
     // Now that we have resolved the references, we can dereference them
     const dereferencedSchema = await parser.dereference(filePath, parsedContent, {
-        continueOnError: true,
-        resolve: {
-            file: { canRead: true },
-            http: { canRead: true },
-        },
+      continueOnError: true,
+      resolve: {
+        file: { canRead: true },
+        http: { canRead: true },
+      },
     });
     console.log(`Dereferenced schema : ${JSON.stringify(dereferencedSchema)}`);
     return parsedContent;
@@ -193,7 +223,7 @@ function getDistFileUris(webview: vscode.Webview, extensionUri: vscode.Uri, them
   // to properly bundle css files into dist output
   const styleUri = getUri(webview, extensionUri, ['webview-ui', 'src', 'main.css']);
   let styleThemeUri = getUri(webview, extensionUri, ['webview-ui', 'src', 'light.css']);
-  
+
   //Theme selection should happen at webview reactjs app level. Currently below code is a work around
   if (theme.toLowerCase().includes('dark')) {
     styleThemeUri = getUri(webview, extensionUri, ['webview-ui', 'src', 'dark.css']);
